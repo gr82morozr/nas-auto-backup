@@ -12,7 +12,7 @@ Open `/auto-backup/output/` from NAS Gateway. Enter a source subfolder, or use `
 | `/persistent/auto-backup-db-backups/` | Most recent 48 hourly online database snapshots |
 | `/tmp/output/index.html` | Dashboard served by Nginx |
 
-By default the media mounts use the `source` and `archive` directories under the app's persistent host directory. To use existing NAS shares, set `AUTO_BACKUP_SOURCE_ROOT` and `AUTO_BACKUP_DESTINATION_ROOT` in the parent `env.conf` before deploying. Use absolute paths to separate directories. The deployment user needs read access to the source and write access to the archive. Keep the database on a local filesystem that supports SQLite WAL locking.
+The default host source is `/apps/nasdata/important` and the archive is `/apps/nasdata/important_backup`. Both directories must exist before deployment. The deployment user needs read access to the source and write access to the archive. To override either path, set `AUTO_BACKUP_SOURCE_ROOT` or `AUTO_BACKUP_DESTINATION_ROOT` in the parent `env.conf`. Keep the database on a local filesystem that supports SQLite WAL locking.
 
 ## Verification and recovery
 

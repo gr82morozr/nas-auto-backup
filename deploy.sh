@@ -17,9 +17,8 @@ app_before_clean() (
 import os
 from pathlib import Path
 
-base = Path(os.environ.get("PERSISTENT_APP_ROOT") or "/apps/nas-apps") / "auto-backup"
-source = Path(os.environ.get("AUTO_BACKUP_SOURCE_ROOT") or base / "source").resolve(strict=True)
-archive = Path(os.environ.get("AUTO_BACKUP_DESTINATION_ROOT") or base / "archive").resolve(strict=True)
+source = Path(os.environ.get("AUTO_BACKUP_SOURCE_ROOT") or "/apps/nasdata/important").resolve(strict=True)
+archive = Path(os.environ.get("AUTO_BACKUP_DESTINATION_ROOT") or "/apps/nasdata/important_backup").resolve(strict=True)
 if source.is_relative_to(archive) or archive.is_relative_to(source):
     raise SystemExit("Auto Backup source and archive must be separate, non-overlapping directories.")
 if not source.is_dir() or not os.access(source, os.R_OK | os.X_OK):
