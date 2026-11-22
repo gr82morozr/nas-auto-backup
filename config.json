@@ -1,5 +1,7 @@
 {
   "app": {
-    "title": "Auto Backup"
+    "title": "Auto Backup",
+    "source_folders": ["/apps/nasdata/important"],
+    "backup_folder": "/apps/nasdata/important_backup"
   }
 }
