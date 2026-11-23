@@ -64,6 +64,12 @@ class ControlHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         print(f"{LOG_PREFIX} {self.address_string()} - {format % args}", flush=True)
 
+    def log_request(self, code="-", size="-") -> None:
+        route = urlparse(getattr(self, "path", "")).path.rstrip("/").removeprefix("/auto-backup/control")
+        if self.command == "GET" and code == 200 and route in {"/healthz", "/api/status", "/progress"}:
+            return
+        super().log_request(code, size)
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path.rstrip("/") or "/"
         route = path.removeprefix("/auto-backup/control")

@@ -1,6 +1,6 @@
 # Auto Backup
 
-Open `/auto-backup/output/` from NAS Gateway. Enter a source subfolder, or use `.` for the entire mounted source. **Start backup** queues a recursive scan. Closing the browser leaves the job running. **Check archive now** queues an additional integrity check. The dashboard shows the current file, decode timestamp or read percentage, queue counts, and links to paginated file reports and event logs. Times are UTC.
+Open `/auto-backup/output/` from NAS Gateway. In **Settings**, edit `app.source_folders` (a list of NAS host directories) and `app.backup_folder` (one NAS host directory). Select folders inside their respective Docker mounts. Use `.` on the dashboard to scan every configured source, or enter a subfolder relative to the source mount. **Start backup** saves the folder selection with the job. A later settings change applies to new jobs. Existing verified files keep their recorded locations for deduplication, audits, and repairs. Closing the browser leaves the job running. **Check archive now** queues an additional integrity check. Times are UTC.
 
 ## Storage
 
@@ -16,7 +16,7 @@ The default host source is `/apps/nasdata/important` and the archive is `/apps/n
 
 ## Verification and recovery
 
-The worker hashes each stable source file and fully decodes its audio and video streams with FFmpeg, including supported still images. Unsupported files and decoder errors appear in the report. Files identical to an existing verified backup are recorded as duplicates, with a link between the source path and the canonical archive path in SQLite. A successful decode cannot establish that a recording was complete before its first scan.
+The worker hashes each source file and selects a check using its detected MIME type and filename. FFmpeg decodes media streams, qpdf checks PDF structure, and xlrd reads legacy XLS workbooks. For ZIP files and ZIP-based Office documents such as XLSX, unzip tests the archive entries and their CRCs. Other binaries receive SHA-256 copy verification only. This confirms that the archive matches the source bytes. The job event log records the check used. Failed file rows store the phase and diagnostic output in SQLite (`files.detail`), also visible in the job report. Files identical to an existing verified backup are recorded as duplicates, with a link between the source path and the canonical archive path in SQLite. A successful decode cannot establish that a recording was complete before its first scan.
 
 The worker copies new files with rsync, hashes the staged destination independently, then renames it into place. On restart it preserves completed results, rechecks the interrupted file and reuses partial transfers. Monthly audits re-read each due backup, including after downtime. On a mismatch, the worker checks known source paths, then searches the mounted source tree by size and SHA-256. A verified replacement keeps the original digest. Unresolved damage remains in the report.
 

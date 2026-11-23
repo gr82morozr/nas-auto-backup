@@ -3,6 +3,7 @@ import os
 import json
 import sqlite3
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -100,9 +101,17 @@ def initialize():
                 db.execute("ALTER TABLE jobs ADD COLUMN archive_prefix TEXT NOT NULL DEFAULT '.'")
 
 
-def event(db, action, detail="", job=None, file=None):
+def log_activity(action, **fields):
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    values = " ".join(f"{key}={json.dumps(value, ensure_ascii=True)}"
+                      for key, value in fields.items() if value is not None and value != "")
+    print(f"{stamp} [auto-backup] {action} {values}".rstrip(), flush=True)
+
+
+def event(db, action, detail="", job=None, file=None, **fields):
     db.execute("INSERT INTO events(job,file,action,detail) VALUES(?,?,?,?)",
                (job, file, action, detail))
+    log_activity(action, job=job, file=file, detail=detail, **fields)
 
 
 def source_folder(folder):
@@ -138,7 +147,7 @@ def enqueue(db, kind, folder="."):
             return existing["id"]
         job = db.execute("INSERT INTO jobs(kind,folder,sources,archive_prefix) VALUES(?,?,?,?)",
                          (kind, folder, sources, archive)).lastrowid
-        event(db, "requested", folder, job)
+        event(db, "requested", folder, job, kind=kind, sources=roots, archive=archive)
         return job
 
 
@@ -146,4 +155,5 @@ def stage(db, item, state, detail="", digest=None, destination=None):
     db.execute("""UPDATE files SET state=?, detail=?, progress='', hash=coalesce(?,hash),
                   destination=coalesce(?,destination) WHERE id=?""",
                (state, detail, digest, destination, item["id"]))
-    event(db, state, detail, item["job"], item["id"])
+    event(db, state, detail, item["job"], item["id"], path=item["path"],
+          sha256=digest, destination=destination)

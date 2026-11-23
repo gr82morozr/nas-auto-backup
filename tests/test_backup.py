@@ -1,3 +1,4 @@
+import json
 import shutil
 import sqlite3
 import subprocess
@@ -57,8 +58,9 @@ class BackupTests(unittest.TestCase):
         (self.source / "document.txt").write_text("this is not media")
         job = self.job("backup")
         states = self.states(job)
-        self.assertEqual(sorted(states.values()), ["duplicate","failed","failed","passed","passed","passed"])
+        self.assertEqual(sorted(states.values()), ["duplicate","failed","passed","passed","passed","passed"])
         self.assertEqual(states["broken.wav"], "failed")
+        self.assertEqual(states["document.txt"], "passed")
         self.assertIn("duplicate", backup_report.report(self.db, job, "", 0))
         self.assertEqual(len(backup_report.dashboard(self.db, 0)["jobs"]), 1)
         digest = worker.sha256(original)
@@ -80,6 +82,50 @@ class BackupTests(unittest.TestCase):
             self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(db.execute("SELECT healthy FROM archive WHERE hash=?", (digest,)).fetchone()[0], 0)
 
+    def test_flac_uses_probed_container_and_reports_decode_errors(self):
+        cover = self.media("art.png", "-f", "lavfi", "-i", "color=size=32x32", "-frames:v", "1")
+        audio = self.media("cover.flac", "-f", "lavfi", "-i", "sine=duration=1",
+                           "-i", str(cover), "-c:a", "flac", "-c:v", "copy",
+                           "-disposition:v", "attached_pic")
+        cover.unlink()
+        renamed = audio.rename(self.source / "wrong.wav")
+        with patch.object(subprocess, "Popen", wraps=subprocess.Popen) as launch:
+            detail = worker.media_check(renamed, lambda message: None)
+        decode = next(call.args[0] for call in launch.call_args_list if call.args[0][0] == "ffmpeg")
+        self.assertEqual(decode[decode.index("-i")-2:decode.index("-i")], ["-f", "flac"])
+        self.assertIn("audio flac", detail)
+        self.assertIn("video png", detail)
+        renamed.write_bytes(renamed.read_bytes()[:-53])
+        job = self.job("backup")
+        row = self.db.execute("SELECT state,detail FROM files WHERE job=?", (job,)).fetchone()
+        self.assertEqual(row["state"], "failed")
+        self.assertIn("ffprobe format=flac, FFmpeg input=flac", row["detail"])
+        self.assertIn("FFmpeg decode failed", row["detail"])
+
+    def test_non_media_routing_and_failure_log(self):
+        for name, mime, tool in [
+                ("renamed.bin", "application/pdf", "qpdf"),
+                ("sheet.XLS", "application/octet-stream", sys.executable),
+                ("sheet.xlsx", "application/zip", "unzip"),
+                ("data.bin", "application/octet-stream", None)]:
+            with self.subTest(name=name), patch.object(worker, "checked_output",
+                    side_effect=[mime, ""]) as check, patch.object(worker, "media_check") as media:
+                worker.validate_file(self.source / name, lambda message: None)
+                commands = [call.args[0][0] for call in check.call_args_list]
+                self.assertEqual(commands, ["file", tool] if tool else ["file"])
+                media.assert_not_called()
+
+        (self.source / "damaged.pdf").write_bytes(b"%PDF")
+        diagnostic = "first warning\n" + "x" * 2500 + "\nlast error"
+        with patch.object(subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, "application/pdf", ""),
+                subprocess.CompletedProcess([], 2, "checking file", diagnostic)]):
+            job = self.job("backup")
+        row = self.db.execute("SELECT state,detail FROM files WHERE job=?", (job,)).fetchone()
+        self.assertEqual(row["state"], "failed")
+        self.assertIn("validating: qpdf exited with status 2", row["detail"])
+        self.assertIn("checking file\n" + diagnostic, row["detail"])
+
     def test_resume_replays_only_unfinished_files(self):
         job = store.enqueue(self.db, "backup")
         self.assertEqual(store.enqueue(self.db, "backup"), job)
@@ -91,6 +137,27 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(self.states(job), {"done":"passed","interrupted":"queued"})
         with self.assertRaises((ValueError, OSError)):
             store.enqueue(self.db, "backup", "..")
+
+    def test_configured_folders_are_saved_with_job(self):
+        config = store.default_config()
+        app = config["app"]
+        source = app["source_folders"][0]
+        archive = app["backup_folder"]
+        for folder in ("first", "second", "excluded"):
+            (self.source / folder).mkdir()
+            self.media(folder + "/clip.wav", "-f", "lavfi", "-i", "sine", "-t", "0.1")
+        app.update(source_folders=[source+"/first", source+"/second"], backup_folder=archive+"/family")
+        settings = store.DATA / "config.json"
+        settings.write_text(json.dumps(config))
+        job = store.enqueue(self.db, "backup")
+        with self.assertRaises(ValueError):
+            store.enqueue(self.db, "backup", "excluded")
+        settings.write_text(json.dumps(store.default_config()))
+        worker.run_job(self.db, self.db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone())
+        self.assertEqual(set(self.states(job)), {"first/clip.wav", "second/clip.wav"})
+        self.assertEqual(sorted(self.states(job).values()), ["duplicate", "passed"])
+        self.assertEqual(len(list((self.archive / "family").rglob("*.wav"))), 1)
+        self.assertIn("verified", self.states(self.job("audit")).values())
 
     def test_hourly_snapshots_and_overdue_monthly_audit(self):
         store.enqueue(self.db, "backup")

@@ -38,9 +38,10 @@
     <section aria-labelledby="activity">
       <h2 id="activity">Backup activity</h2>
       <form id="request"><label for="folder">Source subfolder</label>
-        <input id="folder" value="." required title="Relative to the configured source root">
+        <input id="folder" value="." required aria-describedby="folder-help">
         <button type="submit">Start backup</button><button id="audit" type="button">Check archive now</button>
       </form>
+      <p id="folder-help">Use . for all source folders in Settings, or enter a subfolder relative to the source mount.</p>
       <p id="message" role="status"></p>
     </section>
     <section><h2 id="job">Current job</h2><p id="current">Loading progress…</p>
