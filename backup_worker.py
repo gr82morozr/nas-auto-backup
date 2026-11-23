@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import backup_store as store
+from mutagen import MutagenError
+from mutagen.flac import FLAC
 
 
 def next_month():
@@ -80,15 +82,28 @@ def validate_file(path, progress):
     return f"SHA-256 copy verification only ({mime})"
 
 
+def verify_flac_checksum(path):
+    info = FLAC(path).info
+    if not info.md5_signature or info.bits_per_sample not in (8, 16, 24, 32):
+        raise ValueError("No supported embedded FLAC audio checksum")
+    pcm = "pcm_s8" if info.bits_per_sample == 8 else f"pcm_s{info.bits_per_sample}le"
+    output = checked_output(["ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe",
+                             "-f", "flac", "-i", str(path), "-map", "0:a:0", "-c:a", pcm,
+                             "-f", "hash", "-hash", "md5", "-"])
+    if output.strip().lower() != f"md5={info.md5_signature:032x}":
+        raise ValueError("Decoded audio differs from the embedded FLAC checksum")
+
+
 def media_check(path, progress):
     output = checked_output(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe",
                              "-show_entries", "stream=index,codec_type,codec_name:format=format_name",
                              "-of", "json", str(path)])
     info = json.loads(output)
-    streams = [s for s in info.get("streams", []) if s["codec_type"] in ("audio", "video")]
     formats = (info.get("format", {}).get("format_name") or "").split(",")
     # ffprobe lists aliases of the same demuxer, e.g. "matroska,webm".
     demuxer = formats[0]
+    stream_types = ("audio",) if demuxer == "mp3" else ("audio", "video")
+    streams = [s for s in info.get("streams", []) if s["codec_type"] in stream_types]
     if not demuxer or not streams or {"tty", "bin", "data", "hls", "dash", "concat", "sdp"}.intersection(formats):
         raise ValueError(f"No supported standalone media in ffprobe result: {output.strip()}")
     stream_info = ", ".join(f"#{s['index']} {s['codec_type']} {s.get('codec_name', 'unknown')}" for s in streams)
@@ -100,6 +115,12 @@ def media_check(path, progress):
                "-f", demuxer]
     if demuxer == "image2":
         command.extend(["-pattern_type", "none"])
+    if demuxer == "mp3":
+        command.append("-vn")
+    # Some MPEG-2 recorders leave extra zero padding at the end of a slice.
+    for stream in streams:
+        if stream.get("codec_name") == "mpeg2video":
+            command.extend([f"-err_detect:{stream['index']}", "crccheck+buffer+explode"])
     command.extend(["-i", str(path)])
     for stream in streams:
         command.extend(["-map", f"0:{stream['index']}"])
@@ -111,11 +132,23 @@ def media_check(path, progress):
                     progress("Decoded through " + update.split("=", 1)[1].strip())
             result = process.wait()
         log.seek(0)
-        markers = (b"corrupt", b"truncat", b"eoi missing", b"concealing", b"invalid data",
+        markers = (b"corrupt", b"truncat", b"concealing", b"invalid data",
                    b"decode error", b"ended prematurely", b"partial file")
+        # Input probing can mention a JPEG end marker even with video disabled.
+        if demuxer != "mp3":
+            markers += (b"eoi missing",)
         if result or any(any(marker in line.lower() for marker in markers) for line in log):
             log.seek(0)
-            raise ValueError(f"{description}\nFFmpeg decode failed (exit {result})\n{log.read().decode(errors='replace')}")
+            diagnostics = log.read().decode(errors="replace")
+            failure = f"{description}\nFFmpeg decode failed (exit {result})\n{diagnostics}"
+            if (demuxer == "flac" and len(streams) == 1 and streams[0].get("codec_name") == "flac"
+                    and "invalid sync code" in diagnostics.lower()):
+                try:
+                    verify_flac_checksum(path)
+                except (MutagenError, OSError, ValueError) as exc:
+                    raise ValueError(f"{failure}\nFLAC checksum verification failed: {exc}") from exc
+                return f"{description}\nDecoded audio matches embedded FLAC MD5. Strict decode log:\n{diagnostics}"
+            raise ValueError(failure)
     return f"Media streams decoded. {description}"
 
 

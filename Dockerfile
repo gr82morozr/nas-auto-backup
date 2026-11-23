@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg rsync file qpdf unzip && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir xlrd==2.0.2
+RUN pip install --no-cache-dir xlrd==2.0.2 mutagen==1.47.0
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY apps_common ./apps_common
 COPY apps/auto-backup/auto-backup.py apps/auto-backup/control-service.py apps/auto-backup/supervisor.py ./

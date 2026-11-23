@@ -102,6 +102,16 @@ class BackupTests(unittest.TestCase):
         self.assertIn("ffprobe format=flac, FFmpeg input=flac", row["detail"])
         self.assertIn("FFmpeg decode failed", row["detail"])
 
+    def test_flac_fallback_requires_matching_embedded_checksum(self):
+        path = self.media("audio.flac", "-f", "lavfi", "-i", "sine=duration=1")
+        worker.verify_flac_checksum(path)
+        # Native FLAC STREAMINFO starts at offset 8, with the MD5 at offset 26.
+        with path.open("r+b") as stream:
+            stream.seek(26)
+            stream.write(bytes.fromhex("11" * 16))
+        with self.assertRaisesRegex(ValueError, "differs from the embedded"):
+            worker.verify_flac_checksum(path)
+
     def test_non_media_routing_and_failure_log(self):
         for name, mime, tool in [
                 ("renamed.bin", "application/pdf", "qpdf"),
@@ -125,6 +135,30 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(row["state"], "failed")
         self.assertIn("validating: qpdf exited with status 2", row["detail"])
         self.assertIn("checking file\n" + diagnostic, row["detail"])
+
+    def test_success_history_survives_restart_rescan_and_audit(self):
+        source = self.source / "original.wav"
+        self.media(source.name, "-f", "lavfi", "-i", "sine", "-t", "0.1")
+        first_job = self.job("backup")
+        def first_result():
+            return self.db.execute("SELECT * FROM files WHERE job=? AND path=?",
+                                   (first_job, source.name)).fetchone()
+
+        original = dict(first_result())
+        self.assertEqual(original["state"], "passed")
+        self.db.close()
+        store.initialize()
+        self.db = store.connect()
+        self.addCleanup(self.db.close)
+        worker.recover(self.db)
+
+        renamed = source.rename(self.source / "renamed.wav")
+        self.assertEqual(self.states(self.job("backup")), {renamed.name: "duplicate"})
+        renamed.unlink()
+        self.assertEqual(self.states(self.job("audit")), {original["destination"]: "verified"})
+        self.assertEqual(dict(first_result()), original)
+        archive = self.db.execute("SELECT hash,destination FROM archive").fetchall()
+        self.assertEqual([tuple(row) for row in archive], [(original["hash"], original["destination"])])
 
     def test_resume_replays_only_unfinished_files(self):
         job = store.enqueue(self.db, "backup")
